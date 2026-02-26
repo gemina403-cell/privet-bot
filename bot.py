@@ -96,12 +96,30 @@ def generate_avatar(photo_bytes: bytes, session: dict) -> bytes:
         font_size_main = 110
         font_size_top = 46
     
+    import urllib.request, os
+    font_path = "/app/font.ttf"
+    if not os.path.exists(font_path):
+        try:
+            urllib.request.urlretrieve(
+                "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Bold.ttf",
+                font_path
+            )
+        except:
+            font_path = None
+
     try:
-        font_main = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size_main)
-        font_top = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size_top)
+        if font_path and os.path.exists(font_path):
+            font_main = ImageFont.truetype(font_path, font_size_main)
+            font_top = ImageFont.truetype(font_path, font_size_top)
+        else:
+            raise Exception("no font")
     except:
-        font_main = ImageFont.load_default()
-        font_top = font_main
+        try:
+            font_main = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size_main)
+            font_top = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size_top)
+        except:
+            font_main = ImageFont.load_default().font_variant(size=font_size_main)
+            font_top = ImageFont.load_default().font_variant(size=font_size_top)
 
     W, H = img.size
 
