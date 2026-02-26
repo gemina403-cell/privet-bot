@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 # ====== НАСТРОЙКИ ======
-BOT_TOKEN = "ВАШ_ТОКЕН_СЮДА"  # Получить у @BotFather
+BOT_TOKEN = "8536905259:AAFcIuz_3JYknR-cHdzMDXEuEsi6sDrEZFA"  # Получить у @BotFather
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
