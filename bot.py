@@ -1,60 +1,69 @@
 """
 PRIVET Avatar Editor Bot
-Телеграм-бот для создания аватарок с логотипом PRIVET
-Установка: pip install python-telegram-bot pillow
 """
 
 import os
 import io
 import logging
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import urllib.request
+from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# ====== НАСТРОЙКИ ======
-BOT_TOKEN = "8536905259:AAFcIuz_3JYknR-cHdzMDXEuEsi6sDrEZFA"  # Получить у @BotFather
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8536905259:AAFcIuz_3JYknR-cHdzMDXEuEsi6sDrEZFA")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ====== ЦВЕТА ======
+# Скачиваем шрифт при старте
+FONT_PATH = "/app/font.ttf"
+FONT_URL = "https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Bold.ttf"
+
+def download_font():
+    if not os.path.exists(FONT_PATH):
+        try:
+            logger.info("Скачиваю шрифт...")
+            urllib.request.urlretrieve(FONT_URL, FONT_PATH)
+            logger.info("Шрифт скачан!")
+        except Exception as e:
+            logger.error(f"Не удалось скачать шрифт: {e}")
+
+download_font()
+
 COLORS = {
-    "white":     ("⬜ Белый",     (255, 255, 255)),
-    "black":     ("⬛ Чёрный",    (0,   0,   0)),
-    "red":       ("🔴 Красный",   (220, 50,  50)),
-    "blue":      ("🔵 Синий",     (30,  100, 220)),
-    "green":     ("🟢 Зелёный",   (50,  200, 80)),
-    "yellow":    ("🟡 Жёлтый",    (255, 220, 0)),
-    "orange":    ("🟠 Оранжевый", (255, 140, 0)),
-    "purple":    ("🟣 Фиолетовый",(140, 50,  200)),
-    "pink":      ("🌸 Розовый",   (255, 100, 180)),
-    "cyan":      ("🩵 Голубой",   (0,   180, 255)),
-    "teal":      ("💎 Бирюзовый", (0,   200, 180)),
-    "lavender":  ("💜 Лавандовый",(170, 130, 255)),
-    "maroon":    ("🟥 Бордовый",  (150, 20,  50)),
-    "gray":      ("⚪ Серый",     (160, 160, 160)),
+    "white":    ("⬜ Белый",      (255, 255, 255)),
+    "black":    ("⬛ Чёрный",     (0,   0,   0)),
+    "red":      ("🔴 Красный",    (220, 50,  50)),
+    "blue":     ("🔵 Синий",      (30,  100, 220)),
+    "green":    ("🟢 Зелёный",    (50,  200, 80)),
+    "yellow":   ("🟡 Жёлтый",     (255, 220, 0)),
+    "orange":   ("🟠 Оранжевый",  (255, 140, 0)),
+    "purple":   ("🟣 Фиолетовый", (140, 50,  200)),
+    "pink":     ("🌸 Розовый",    (255, 100, 180)),
+    "cyan":     ("🩵 Голубой",    (0,   180, 255)),
+    "teal":     ("💎 Бирюзовый",  (0,   200, 180)),
+    "lavender": ("💜 Лавандовый", (170, 130, 255)),
+    "maroon":   ("🟥 Бордовый",   (150, 20,  50)),
+    "gray":     ("⚪ Серый",      (160, 160, 160)),
 }
 
-# ====== СТИЛИ НАЛОЖЕНИЯ ======
-# Каждый стиль — это настройки отрисовки логотипа
 STYLES = {
     "1": "Стандартный",
     "2": "Жирный",
-    "3": "Тонкий",
+    "3": "Без фона",
     "4": "С тенью",
     "5": "С обводкой",
-    "6": "Курсив",
-    "7": "Заглавные буквы",
-    "8": "Маленький размер",
-    "9": "Большой размер",
-    "10": "По центру",
-    "11": "Угловой",
+    "6": "Маленький",
+    "7": "Большой",
+    "8": "По центру",
+    "9": "Снизу слева",
+    "10": "Снизу справа",
+    "11": "Сверху",
 }
 
-# Хранилище сессий пользователей
 user_sessions = {}
 
 def get_session(user_id):
@@ -63,119 +72,109 @@ def get_session(user_id):
             "photo": None,
             "color": "teal",
             "style": "1",
-            "text_type": "logo",  # logo / custom
+            "text_type": "logo",
             "custom_text": "PRIVET",
         }
     return user_sessions[user_id]
 
+def get_font(size):
+    paths = [
+        FONT_PATH,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except:
+                continue
+    return ImageFont.load_default()
 
-# ====== ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ ======
 def generate_avatar(photo_bytes: bytes, session: dict) -> bytes:
     img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
     img = img.resize((600, 600), Image.LANCZOS)
-
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     color_rgb = COLORS[session["color"]][1]
     style = session["style"]
-    text = session["custom_text"] if session["text_type"] == "custom" else None
-
-    # Формируем текст
-    line1 = "КОД" if text is None else ""
-    line2 = "PRIVET" if text is None else text.upper()
-
-    # Настройки стиля
-    font_size_main = 90
-    font_size_top = 38
-
-    if style == "8":
-        font_size_main = 55
-        font_size_top = 25
-    elif style == "9":
-        font_size_main = 110
-        font_size_top = 46
-    
-    import urllib.request, os
-    font_path = "/app/font.ttf"
-    if not os.path.exists(font_path):
-        try:
-            urllib.request.urlretrieve(
-                "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Bold.ttf",
-                font_path
-            )
-        except:
-            font_path = None
-
-    try:
-        if font_path and os.path.exists(font_path):
-            font_main = ImageFont.truetype(font_path, font_size_main)
-            font_top = ImageFont.truetype(font_path, font_size_top)
-        else:
-            raise Exception("no font")
-    except:
-        try:
-            font_main = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size_main)
-            font_top = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size_top)
-        except:
-            font_main = ImageFont.load_default().font_variant(size=font_size_main)
-            font_top = ImageFont.load_default().font_variant(size=font_size_top)
-
     W, H = img.size
 
-    # Позиция
-    if style == "11":
-        cx, cy = W - 160, H - 120
-    else:
-        cx, cy = W // 2, H - 130
+    # Размеры шрифта
+    size_main = 90
+    size_top = 36
+    if style == "6":
+        size_main = 55
+        size_top = 22
+    elif style == "7":
+        size_main = 115
+        size_top = 46
 
-    # Фоновый прямоугольник (полупрозрачный)
-    if style not in ("3", "6"):
-        bg_w, bg_h = 300, 130 if line1 else 100
+    font_main = get_font(size_main)
+    font_top = get_font(size_top)
+
+    # Текст
+    top_text = "КОД" if session["text_type"] == "logo" else ""
+    main_text = "PRIVET" if session["text_type"] == "logo" else session["custom_text"].upper()
+
+    # Позиция
+    if style == "9":
+        cx, cy = 160, H - 120
+    elif style == "10":
+        cx, cy = W - 160, H - 120
+    elif style == "11":
+        cx, cy = W // 2, 120
+    else:
+        cx, cy = W // 2, H - 120
+
+    # Фон
+    if style != "3":
+        bw, bh = 320, 140 if top_text else 110
         draw.rounded_rectangle(
-            [cx - bg_w//2, cy - bg_h//2, cx + bg_w//2, cy + bg_h//2],
-            radius=16,
-            fill=(0, 0, 0, 160)
+            [cx - bw//2, cy - bh//2, cx + bw//2, cy + bh//2],
+            radius=18, fill=(0, 0, 0, 170)
         )
 
     # Тень
     if style == "4":
-        draw.text((cx + 3, cy + 3 + (0 if not line1 else 18)),
-                  line2, font=font_main, fill=(0, 0, 0, 180), anchor="mm")
+        offset_y = cy + (22 if top_text else 0)
+        draw.text((cx+3, offset_y+3), main_text, font=font_main,
+                  fill=(0, 0, 0, 180), anchor="mm")
 
-    # Текст "КОД" (маленький, белый)
-    if line1:
-        draw.text((cx, cy - 38), line1, font=font_top,
+    # Верхний текст КОД
+    if top_text:
+        draw.text((cx, cy - 38), top_text, font=font_top,
                   fill=(255, 255, 255, 255), anchor="mm")
 
-    # Основной текст PRIVET с обводкой
+    # Обводка
     if style == "5":
-        for dx in [-2, 2]:
-            for dy in [-2, 2]:
-                draw.text((cx + dx, cy + (20 if line1 else 0) + dy),
-                          line2, font=font_main, fill=(0, 0, 0, 200), anchor="mm")
+        for dx in [-3, 3]:
+            for dy in [-3, 3]:
+                draw.text((cx+dx, cy + (22 if top_text else 0) + dy),
+                          main_text, font=font_main,
+                          fill=(0, 0, 0, 200), anchor="mm")
 
+    # Основной текст
     draw.text(
-        (cx, cy + (20 if line1 else 0)),
-        line2,
+        (cx, cy + (22 if top_text else 0)),
+        main_text,
         font=font_main,
         fill=(*color_rgb, 255),
         anchor="mm"
     )
 
-    # Наложение
     result = Image.alpha_composite(img, overlay).convert("RGB")
     out = io.BytesIO()
     result.save(out, format="JPEG", quality=92)
     out.seek(0)
     return out.read()
 
-
-# ====== КЛАВИАТУРЫ ======
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎨 Выбрать цвет", callback_data="menu_color"),
-         InlineKeyboardButton("🖼 Выбрать стиль", callback_data="menu_style")],
+        [InlineKeyboardButton("🎨 Цвет", callback_data="menu_color"),
+         InlineKeyboardButton("🖼 Стиль", callback_data="menu_style")],
         [InlineKeyboardButton("✏️ Свой текст", callback_data="menu_custom"),
          InlineKeyboardButton("🔁 КОД PRIVET", callback_data="menu_logo")],
         [InlineKeyboardButton("✅ Создать аватарку!", callback_data="generate")],
@@ -198,7 +197,7 @@ def style_keyboard():
     buttons = []
     row = []
     for key, label in STYLES.items():
-        row.append(InlineKeyboardButton(f"#{key} {label}", callback_data=f"style_{key}"))
+        row.append(InlineKeyboardButton(f"{label}", callback_data=f"style_{key}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -207,34 +206,23 @@ def style_keyboard():
     buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
 
-
-# ====== ХЭНДЛЕРЫ ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот для создания аватарок с логотипом *PRIVET*.\n\n"
-        "📸 Просто отправь мне своё фото, и мы начнём!",
+        "📸 Отправь своё фото и начнём!",
         parse_mode="Markdown"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     session = get_session(user_id)
-
     photo = update.message.photo[-1]
     file = await photo.get_file()
     photo_bytes = await file.download_as_bytearray()
     session["photo"] = bytes(photo_bytes)
 
-    color_label = COLORS[session["color"]][0]
-    style_label = STYLES[session["style"]]
-    text_info = "КОД PRIVET" if session["text_type"] == "logo" else f"«{session['custom_text']}»"
-
     await update.message.reply_text(
-        f"✅ Фото загружено!\n\n"
-        f"🎨 Цвет: {color_label}\n"
-        f"🖼 Стиль: #{session['style']} {style_label}\n"
-        f"📝 Текст: {text_info}\n\n"
-        f"Настрой параметры или сразу создавай аватарку 👇",
+        "✅ Фото загружено! Настрой параметры или сразу создавай 👇",
         reply_markup=main_menu_keyboard()
     )
 
@@ -246,109 +234,80 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "menu_color":
-        await query.edit_message_text("🎨 Выбери цвет наложения:", reply_markup=color_keyboard())
+        await query.edit_message_text("🎨 Выбери цвет:", reply_markup=color_keyboard())
 
     elif data == "menu_style":
-        await query.edit_message_text("🖼 Выбери стиль оформления:", reply_markup=style_keyboard())
+        await query.edit_message_text("🖼 Выбери стиль:", reply_markup=style_keyboard())
 
     elif data == "menu_custom":
         session["text_type"] = "custom"
-        await query.edit_message_text(
-            "✏️ Отправь мне текст, который хочешь нанести на аватарку.\n"
-            "Напиши его в следующем сообщении:"
-        )
         context.user_data["waiting_custom_text"] = True
+        await query.edit_message_text("✏️ Напиши текст для аватарки (следующим сообщением):")
 
     elif data == "menu_logo":
         session["text_type"] = "logo"
-        session["custom_text"] = "PRIVET"
-        await query.edit_message_text(
-            "✅ Режим «КОД PRIVET» выбран!",
-            reply_markup=main_menu_keyboard()
-        )
+        await query.edit_message_text("✅ Режим «КОД PRIVET» выбран!", reply_markup=main_menu_keyboard())
 
     elif data.startswith("color_"):
-        key = data.replace("color_", "")
-        session["color"] = key
-        label = COLORS[key][0]
+        session["color"] = data.replace("color_", "")
         await query.edit_message_text(
-            f"✅ Цвет выбран: {label}",
+            f"✅ Цвет: {COLORS[session['color']][0]}",
             reply_markup=main_menu_keyboard()
         )
 
     elif data.startswith("style_"):
-        key = data.replace("style_", "")
-        session["style"] = key
+        session["style"] = data.replace("style_", "")
         await query.edit_message_text(
-            f"✅ Стиль выбран: #{key} {STYLES[key]}",
+            f"✅ Стиль: {STYLES[session['style']]}",
             reply_markup=main_menu_keyboard()
         )
 
     elif data == "back":
-        color_label = COLORS[session["color"]][0]
-        style_label = STYLES[session["style"]]
-        text_info = "КОД PRIVET" if session["text_type"] == "logo" else f"«{session['custom_text']}»"
         await query.edit_message_text(
-            f"🎨 Цвет: {color_label}\n"
-            f"🖼 Стиль: #{session['style']} {style_label}\n"
-            f"📝 Текст: {text_info}\n\n"
-            f"Выбери что изменить или создавай аватарку 👇",
+            "Выбери параметры или создавай аватарку 👇",
             reply_markup=main_menu_keyboard()
         )
 
     elif data == "generate":
         if not session["photo"]:
-            await query.edit_message_text(
-                "❌ Сначала отправь фото!\nНапиши /start и загрузи фото."
-            )
+            await query.edit_message_text("❌ Сначала отправь фото!")
             return
-
-        await query.edit_message_text("⏳ Создаю аватарку, подожди...")
-
+        await query.edit_message_text("⏳ Создаю аватарку...")
         try:
             result_bytes = generate_avatar(session["photo"], session)
             await context.bot.send_photo(
                 chat_id=query.message.chat_id,
                 photo=InputFile(io.BytesIO(result_bytes), filename="privet_avatar.jpg"),
-                caption="🎉 Аватарка готова! Сохрани и поставь себе на профиль.\n\n"
-                        "Хочешь изменить? Просто отправь новое фото или нажми кнопки выше."
+                caption="🎉 Аватарка готова!\n\nОтправь новое фото чтобы сделать ещё."
             )
         except Exception as e:
-            logger.error(f"Ошибка генерации: {e}")
+            logger.error(f"Ошибка: {e}")
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text="❌ Ошибка при создании. Попробуй ещё раз."
+                text="❌ Ошибка. Попробуй ещё раз."
             )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     session = get_session(user_id)
-
     if context.user_data.get("waiting_custom_text"):
         context.user_data["waiting_custom_text"] = False
-        text = update.message.text.strip()[:20]  # Ограничение 20 символов
+        text = update.message.text.strip()[:20]
         session["custom_text"] = text
         session["text_type"] = "custom"
         await update.message.reply_text(
-            f"✅ Текст установлен: «{text}»",
+            f"✅ Текст: «{text}»",
             reply_markup=main_menu_keyboard()
         )
     else:
-        await update.message.reply_text(
-            "📸 Отправь мне фото для создания аватарки!\n"
-            "Или напишите /start"
-        )
+        await update.message.reply_text("📸 Отправь фото для создания аватарки!")
 
-
-# ====== ЗАПУСК ======
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
     print("🤖 Бот PRIVET Avatar запущен!")
     app.run_polling()
 
