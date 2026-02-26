@@ -1,41 +1,65 @@
-"""
-PRIVET Avatar Editor Bot
-"""
-
-import os
-import io
-import logging
-import urllib.request
+import os, io, logging, urllib.request
 from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8536905259:AAFcIuz_3JYknR-cHdzMDXEuEsi6sDrEZFA")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Скачиваем шрифт при старте
-FONT_PATH = "/app/font.ttf"
-FONT_URL = "https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Bold.ttf"
+# ===== ШРИФТЫ =====
+FONTS = {
+    "oswald":   ("💪 Oswald (как STKILL)",   "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald%5Bwght%5D.ttf"),
+    "bebas":    ("🔥 Bebas Neue (жирный)",    "https://github.com/google/fonts/raw/main/ofl/bebasneuepro/BebasNeuePro-SemiExpBook.ttf"),
+    "bangers":  ("💥 Bangers (комиксы)",      "https://github.com/google/fonts/raw/main/ofl/bangers/Bangers-Regular.ttf"),
+    "russo":    ("🇷🇺 Russo One (русский стиль)", "https://github.com/google/fonts/raw/main/ofl/russoone/RussoOne-Regular.ttf"),
+    "ultra":    ("⚡ Ultra (мощный)",          "https://github.com/google/fonts/raw/main/ofl/ultra/Ultra-Regular.ttf"),
+    "teko":     ("🎮 Teko (игровой)",          "https://github.com/google/fonts/raw/main/ofl/teko/Teko%5Bwght%5D.ttf"),
+    "boogaloo": ("😎 Boogaloo (крутой)",       "https://github.com/google/fonts/raw/main/ofl/boogaloo/Boogaloo-Regular.ttf"),
+    "satisfy":  ("✨ Satisfy (красивый)",       "https://github.com/google/fonts/raw/main/ofl/satisfy/Satisfy-Regular.ttf"),
+}
 
-def download_font():
-    if not os.path.exists(FONT_PATH):
+font_cache = {}
+
+def ensure_font(font_key):
+    if font_key in font_cache:
+        return font_cache[font_key]
+    path = f"/app/font_{font_key}.ttf"
+    if not os.path.exists(path):
         try:
-            logger.info("Скачиваю шрифт...")
-            urllib.request.urlretrieve(FONT_URL, FONT_PATH)
-            logger.info("Шрифт скачан!")
+            url = FONTS[font_key][1]
+            logger.info(f"Скачиваю шрифт {font_key}...")
+            urllib.request.urlretrieve(url, path)
+            ImageFont.truetype(path, 50)  # проверка
+            logger.info(f"Шрифт {font_key} скачан!")
         except Exception as e:
-            logger.error(f"Не удалось скачать шрифт: {e}")
+            logger.warning(f"Не удалось скачать {font_key}: {e}")
+            path = None
+    font_cache[font_key] = path
+    return path
 
-download_font()
+def get_font(font_key, size):
+    path = ensure_font(font_key)
+    fallbacks = [
+        path,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+    for p in fallbacks:
+        if p and os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except:
+                continue
+    return ImageFont.load_default()
 
+# Скачиваем первый шрифт сразу при старте
+ensure_font("oswald")
+
+# ===== ЦВЕТА =====
 COLORS = {
+    "teal":     ("💎 Бирюзовый",  (0,   210, 190)),
     "white":    ("⬜ Белый",      (255, 255, 255)),
-    "black":    ("⬛ Чёрный",     (0,   0,   0)),
     "red":      ("🔴 Красный",    (220, 50,  50)),
     "blue":     ("🔵 Синий",      (30,  100, 220)),
     "green":    ("🟢 Зелёный",    (50,  200, 80)),
@@ -44,55 +68,55 @@ COLORS = {
     "purple":   ("🟣 Фиолетовый", (140, 50,  200)),
     "pink":     ("🌸 Розовый",    (255, 100, 180)),
     "cyan":     ("🩵 Голубой",    (0,   180, 255)),
-    "teal":     ("💎 Бирюзовый",  (0,   200, 180)),
     "lavender": ("💜 Лавандовый", (170, 130, 255)),
-    "maroon":   ("🟥 Бордовый",   (150, 20,  50)),
-    "gray":     ("⚪ Серый",      (160, 160, 160)),
+    "maroon":   ("🟥 Бордовый",   (180, 20,  50)),
+    "gold":     ("🥇 Золотой",    (255, 200, 0)),
+    "gray":     ("⚪ Серый",      (180, 180, 180)),
 }
 
+# ===== СТИЛИ =====
 STYLES = {
     "1": "Стандартный",
-    "2": "Жирный",
-    "3": "Без фона",
-    "4": "С тенью",
-    "5": "С обводкой",
+    "2": "Без фона",
+    "3": "С тенью",
+    "4": "С обводкой",
+    "5": "Неон",
     "6": "Маленький",
     "7": "Большой",
     "8": "По центру",
-    "9": "Снизу слева",
-    "10": "Снизу справа",
-    "11": "Сверху",
+    "9": "Сверху",
+    "10": "Снизу слева",
+    "11": "Снизу справа",
 }
 
 user_sessions = {}
 
-def get_session(user_id):
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {
-            "photo": None,
-            "color": "teal",
-            "style": "1",
-            "text_type": "logo",
-            "custom_text": "PRIVET",
+def get_session(uid):
+    if uid not in user_sessions:
+        user_sessions[uid] = {
+            "photo": None, "color": "teal", "style": "1",
+            "font": "oswald", "text_type": "logo", "custom_text": "PRIVET",
         }
-    return user_sessions[user_id]
+    return user_sessions[uid]
 
-def get_font(size):
-    paths = [
-        FONT_PATH,
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except:
-                continue
-    return ImageFont.load_default()
+def draw_outlined(draw, pos, text, font, fill, outline=(0,0,0), width=3):
+    x, y = pos
+    for dx in range(-width, width+1):
+        for dy in range(-width, width+1):
+            if dx or dy:
+                draw.text((x+dx, y+dy), text, font=font, fill=(*outline, 200), anchor="mm")
+    draw.text((x, y), text, font=font, fill=fill, anchor="mm")
 
-def generate_avatar(photo_bytes: bytes, session: dict) -> bytes:
+def draw_neon(draw, pos, text, font, color):
+    x, y = pos
+    r, g, b = color
+    for w in [8, 5, 3]:
+        alpha = 80
+        draw.text((x, y), text, font=font, fill=(r, g, b, alpha), anchor="mm",
+                  stroke_width=w, stroke_fill=(r, g, b, alpha))
+    draw.text((x, y), text, font=font, fill=(r, g, b, 255), anchor="mm")
+
+def generate_avatar(photo_bytes, session):
     img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
     img = img.resize((600, 600), Image.LANCZOS)
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -100,207 +124,181 @@ def generate_avatar(photo_bytes: bytes, session: dict) -> bytes:
 
     color_rgb = COLORS[session["color"]][1]
     style = session["style"]
-    W, H = img.size
+    font_key = session["font"]
+    W, H = 600, 600
 
-    # Размеры шрифта
-    size_main = 90
-    size_top = 36
-    if style == "6":
-        size_main = 55
-        size_top = 22
-    elif style == "7":
-        size_main = 115
-        size_top = 46
+    size_main = 95
+    size_top = 38
+    if style == "6": size_main, size_top = 58, 24
+    elif style == "7": size_main, size_top = 120, 48
 
-    font_main = get_font(size_main)
-    font_top = get_font(size_top)
+    font_main = get_font(font_key, size_main)
+    font_top = get_font(font_key, size_top)
 
-    # Текст
-    top_text = "КОД" if session["text_type"] == "logo" else ""
+    top_text = "KOD" if session["text_type"] == "logo" else ""
     main_text = "PRIVET" if session["text_type"] == "logo" else session["custom_text"].upper()
 
-    # Позиция
-    if style == "9":
-        cx, cy = 160, H - 120
-    elif style == "10":
-        cx, cy = W - 160, H - 120
-    elif style == "11":
-        cx, cy = W // 2, 120
-    else:
-        cx, cy = W // 2, H - 120
+    positions = {"8": (W//2, H//2), "9": (W//2, 110), "10": (155, H-115), "11": (W-155, H-115)}
+    cx, cy = positions.get(style, (W//2, H-115))
 
     # Фон
-    if style != "3":
-        bw, bh = 320, 140 if top_text else 110
-        draw.rounded_rectangle(
-            [cx - bw//2, cy - bh//2, cx + bw//2, cy + bh//2],
-            radius=18, fill=(0, 0, 0, 170)
-        )
+    if style not in ("2", "5"):
+        bw = max(len(main_text) * (size_main // 2) + 50, 220)
+        bh = (size_main + size_top + 24) if top_text else (size_main + 22)
+        draw.rounded_rectangle([cx-bw//2, cy-bh//2, cx+bw//2, cy+bh//2],
+                               radius=16, fill=(0, 0, 0, 170))
 
-    # Тень
-    if style == "4":
-        offset_y = cy + (22 if top_text else 0)
-        draw.text((cx+3, offset_y+3), main_text, font=font_main,
-                  fill=(0, 0, 0, 180), anchor="mm")
+    fill = (*color_rgb, 255)
+    oy = cy + (size_top // 2 + 2 if top_text else 0)
 
-    # Верхний текст КОД
+    # Верхний текст
     if top_text:
-        draw.text((cx, cy - 38), top_text, font=font_top,
-                  fill=(255, 255, 255, 255), anchor="mm")
+        draw_outlined(draw, (cx, cy - size_top), top_text, font_top, (255,255,255,255), width=2)
 
-    # Обводка
-    if style == "5":
-        for dx in [-3, 3]:
-            for dy in [-3, 3]:
-                draw.text((cx+dx, cy + (22 if top_text else 0) + dy),
-                          main_text, font=font_main,
-                          fill=(0, 0, 0, 200), anchor="mm")
-
-    # Основной текст
-    draw.text(
-        (cx, cy + (22 if top_text else 0)),
-        main_text,
-        font=font_main,
-        fill=(*color_rgb, 255),
-        anchor="mm"
-    )
+    # Основной текст по стилю
+    if style == "3":
+        draw.text((cx+5, oy+5), main_text, font=font_main, fill=(0,0,0,150), anchor="mm")
+        draw_outlined(draw, (cx, oy), main_text, font_main, fill, width=2)
+    elif style == "4":
+        draw_outlined(draw, (cx, oy), main_text, font_main, fill, width=4)
+    elif style == "5":
+        draw_neon(draw, (cx, oy), main_text, font_main, color_rgb)
+    else:
+        draw_outlined(draw, (cx, oy), main_text, font_main, fill, width=2)
 
     result = Image.alpha_composite(img, overlay).convert("RGB")
     out = io.BytesIO()
-    result.save(out, format="JPEG", quality=92)
+    result.save(out, format="JPEG", quality=93)
     out.seek(0)
     return out.read()
 
-def main_menu_keyboard():
-    return InlineKeyboardMarkup([
+# ===== КЛАВИАТУРЫ =====
+def main_menu(session):
+    text = (f"🎨 Цвет: {COLORS[session['color']][0]}\n"
+            f"✍️ Шрифт: {FONTS[session['font']][0]}\n"
+            f"🖼 Стиль: {STYLES[session['style']]}\n"
+            f"📝 Текст: {'КОД PRIVET' if session['text_type']=='logo' else session['custom_text']}")
+    kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🎨 Цвет", callback_data="menu_color"),
-         InlineKeyboardButton("🖼 Стиль", callback_data="menu_style")],
-        [InlineKeyboardButton("✏️ Свой текст", callback_data="menu_custom"),
-         InlineKeyboardButton("🔁 КОД PRIVET", callback_data="menu_logo")],
+         InlineKeyboardButton("✍️ Шрифт", callback_data="menu_font")],
+        [InlineKeyboardButton("🖼 Стиль", callback_data="menu_style"),
+         InlineKeyboardButton("✏️ Свой текст", callback_data="menu_custom")],
+        [InlineKeyboardButton("🔁 КОД PRIVET", callback_data="menu_logo")],
         [InlineKeyboardButton("✅ Создать аватарку!", callback_data="generate")],
     ])
+    return text, kb
 
 def color_keyboard():
-    buttons = []
+    rows = []
     row = []
-    for key, (label, _) in COLORS.items():
-        row.append(InlineKeyboardButton(label, callback_data=f"color_{key}"))
+    for k, (label, _) in COLORS.items():
+        row.append(InlineKeyboardButton(label, callback_data=f"color_{k}"))
         if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
-    return InlineKeyboardMarkup(buttons)
+            rows.append(row); row = []
+    if row: rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
+    return InlineKeyboardMarkup(rows)
+
+def font_keyboard():
+    rows = []
+    for k, (label, _) in FONTS.items():
+        rows.append([InlineKeyboardButton(label, callback_data=f"font_{k}")])
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
+    return InlineKeyboardMarkup(rows)
 
 def style_keyboard():
-    buttons = []
+    rows = []
     row = []
-    for key, label in STYLES.items():
-        row.append(InlineKeyboardButton(f"{label}", callback_data=f"style_{key}"))
+    for k, label in STYLES.items():
+        row.append(InlineKeyboardButton(label, callback_data=f"style_{k}"))
         if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
-    return InlineKeyboardMarkup(buttons)
+            rows.append(row); row = []
+    if row: rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
+    return InlineKeyboardMarkup(rows)
 
+# ===== ХЭНДЛЕРЫ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я бот для создания аватарок с логотипом *PRIVET*.\n\n"
-        "📸 Отправь своё фото и начнём!",
+        "👋 Привет! Создаю аватарки с логотипом *PRIVET*.\n\n"
+        "📸 Отправь своё фото и начнём!\n\n"
+        "Можно выбрать:\n• 8 разных шрифтов\n• 14 цветов\n• 11 стилей",
         parse_mode="Markdown"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = get_session(user_id)
+    uid = update.effective_user.id
+    session = get_session(uid)
     photo = update.message.photo[-1]
     file = await photo.get_file()
-    photo_bytes = await file.download_as_bytearray()
-    session["photo"] = bytes(photo_bytes)
-
-    await update.message.reply_text(
-        "✅ Фото загружено! Настрой параметры или сразу создавай 👇",
-        reply_markup=main_menu_keyboard()
-    )
+    session["photo"] = bytes(await file.download_as_bytearray())
+    text, kb = main_menu(session)
+    await update.message.reply_text("✅ Фото загружено!\n\n" + text, reply_markup=kb)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
-    session = get_session(user_id)
+    uid = query.from_user.id
+    session = get_session(uid)
     data = query.data
 
     if data == "menu_color":
         await query.edit_message_text("🎨 Выбери цвет:", reply_markup=color_keyboard())
-
+    elif data == "menu_font":
+        await query.edit_message_text("✍️ Выбери шрифт:\n(первый раз может качаться ~5 сек)", reply_markup=font_keyboard())
     elif data == "menu_style":
         await query.edit_message_text("🖼 Выбери стиль:", reply_markup=style_keyboard())
-
     elif data == "menu_custom":
         session["text_type"] = "custom"
-        context.user_data["waiting_custom_text"] = True
-        await query.edit_message_text("✏️ Напиши текст для аватарки (следующим сообщением):")
-
+        context.user_data["waiting_text"] = True
+        await query.edit_message_text("✏️ Напиши текст следующим сообщением (макс. 15 символов):")
     elif data == "menu_logo":
         session["text_type"] = "logo"
-        await query.edit_message_text("✅ Режим «КОД PRIVET» выбран!", reply_markup=main_menu_keyboard())
-
+        text, kb = main_menu(session)
+        await query.edit_message_text(text, reply_markup=kb)
     elif data.startswith("color_"):
-        session["color"] = data.replace("color_", "")
-        await query.edit_message_text(
-            f"✅ Цвет: {COLORS[session['color']][0]}",
-            reply_markup=main_menu_keyboard()
-        )
-
+        session["color"] = data[6:]
+        text, kb = main_menu(session)
+        await query.edit_message_text(text, reply_markup=kb)
+    elif data.startswith("font_"):
+        session["font"] = data[5:]
+        # Качаем шрифт в фоне
+        ensure_font(session["font"])
+        text, kb = main_menu(session)
+        await query.edit_message_text(text, reply_markup=kb)
     elif data.startswith("style_"):
-        session["style"] = data.replace("style_", "")
-        await query.edit_message_text(
-            f"✅ Стиль: {STYLES[session['style']]}",
-            reply_markup=main_menu_keyboard()
-        )
-
+        session["style"] = data[6:]
+        text, kb = main_menu(session)
+        await query.edit_message_text(text, reply_markup=kb)
     elif data == "back":
-        await query.edit_message_text(
-            "Выбери параметры или создавай аватарку 👇",
-            reply_markup=main_menu_keyboard()
-        )
-
+        text, kb = main_menu(session)
+        await query.edit_message_text(text, reply_markup=kb)
     elif data == "generate":
         if not session["photo"]:
             await query.edit_message_text("❌ Сначала отправь фото!")
             return
         await query.edit_message_text("⏳ Создаю аватарку...")
         try:
-            result_bytes = generate_avatar(session["photo"], session)
+            result = generate_avatar(session["photo"], session)
             await context.bot.send_photo(
                 chat_id=query.message.chat_id,
-                photo=InputFile(io.BytesIO(result_bytes), filename="privet_avatar.jpg"),
-                caption="🎉 Аватарка готова!\n\nОтправь новое фото чтобы сделать ещё."
+                photo=InputFile(io.BytesIO(result), filename="privet.jpg"),
+                caption="🎉 Готово! Отправь новое фото чтобы сделать ещё."
             )
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="❌ Ошибка. Попробуй ещё раз."
-            )
+            await context.bot.send_message(query.message.chat_id, "❌ Ошибка. Попробуй ещё раз.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = get_session(user_id)
-    if context.user_data.get("waiting_custom_text"):
-        context.user_data["waiting_custom_text"] = False
-        text = update.message.text.strip()[:20]
-        session["custom_text"] = text
-        session["text_type"] = "custom"
-        await update.message.reply_text(
-            f"✅ Текст: «{text}»",
-            reply_markup=main_menu_keyboard()
-        )
+    uid = update.effective_user.id
+    session = get_session(uid)
+    if context.user_data.get("waiting_text"):
+        context.user_data["waiting_text"] = False
+        session["custom_text"] = update.message.text.strip()[:15]
+        text, kb = main_menu(session)
+        await update.message.reply_text(f"✅ Текст: «{session['custom_text']}»\n\n" + text, reply_markup=kb)
     else:
-        await update.message.reply_text("📸 Отправь фото для создания аватарки!")
+        await update.message.reply_text("📸 Отправь фото!")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -308,8 +306,9 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("🤖 Бот PRIVET Avatar запущен!")
+    print("🤖 Бот PRIVET запущен!")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
